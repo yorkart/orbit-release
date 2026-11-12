@@ -34,6 +34,7 @@ export async function prepareRelease({ version, revision, repository, server, ho
     copyFileSync(join(stage, 'host/install.sh'), join(stage, 'host-installer.sh'));
     for (const role of ['server', 'host']) rmSync(join(stage, role), { recursive: true });
     const packages = [];
+    const hostPin = { repository, version, revision: hostSource.revision, platforms: {} };
     for (const platform of platforms) {
       for (const [role, name, spec] of [['server', `aow-${platform}.tar.gz`, serverSource],
         ['host', `orbit-host-${version}-${platform}.tar.gz`, hostSource]]) {
@@ -42,6 +43,15 @@ export async function prepareRelease({ version, revision, repository, server, ho
         const sha256 = hash(join(stage, name));
         writeFileSync(join(stage, `${name}.sha256`), `${sha256}  ${name}\n`);
         packages.push({ role, platform, asset: name, sha256, revision: spec.revision });
+        if (role === 'host') {
+          if (!Number.isInteger(manifest.api_version) || manifest.api_version < 1 || typeof manifest.daemon_version !== 'string'
+              || (hostPin.api_version != null && (manifest.api_version !== hostPin.api_version || manifest.daemon_version !== hostPin.daemon_version))) {
+            throw new Error('Host platforms disagree on the wire contract');
+          }
+          hostPin.api_version = manifest.api_version;
+          hostPin.daemon_version = manifest.daemon_version;
+          hostPin.platforms[platform] = { asset: name, sha256 };
+        }
       }
     }
     const installer = readFileSync(join(root, 'install.sh'), 'utf8')
@@ -52,6 +62,7 @@ export async function prepareRelease({ version, revision, repository, server, ho
       execFileSync('bash', ['-n', join(stage, name)]);
     }
     copyFileSync(join(root, 'scripts/orbit-update'), join(stage, 'orbit-update'));
+    writeFileSync(join(stage, 'host-release.json'), `${JSON.stringify(hostPin, null, 2)}\n`);
     writeFileSync(join(stage, 'release.json'), `${JSON.stringify({ version, revision, repository,
       sources: { server: { repository: 'yorkart/aow', ...serverSource }, host: { repository: 'yorkart/orbit-host', ...hostSource } },
       packages }, null, 2)}\n`);

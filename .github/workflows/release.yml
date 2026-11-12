@@ -113,7 +113,9 @@ jobs:
       run:
         working-directory: aow
   server-test:
-    needs: resolve
+    needs:
+      - resolve
+      - host-build
     strategy:
       fail-fast: false
       matrix:
@@ -138,11 +140,18 @@ jobs:
             aow/server/frontend/package-lock.json
       - name: Test Git platform providers
         run: node --test server/git-platform-providers/tests/*.test.mjs
-      - name: Cache verified independent Host release
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      - name: Download this release candidate Host
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          path: aow/target/host/
-          key: orbit-host-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('aow/host-release.json') }}
+          name: host-package-${{ runner.os == 'macOS' && 'macos-aarch64' || 'linux-x86_64' }}
+          path: ${{ runner.temp }}/integration-host-archive
+      - name: Select the immutable Host built in this run
+        run: |-
+          mkdir -p "$RUNNER_TEMP/integration-host"
+          archives=("$RUNNER_TEMP/integration-host-archive/"*.tar.gz)
+          [[ ${#archives[@]} == 1 ]]
+          tar -xzf "${archives[0]}" -C "$RUNNER_TEMP/integration-host"
+          echo "AOW_HOST_BINARY=$RUNNER_TEMP/integration-host/bin/aow-host-daemon" >> "$GITHUB_ENV"
       - name: Validate TypeScript backend
         env:
           NODE_OPTIONS: --max-old-space-size=4096
@@ -150,7 +159,6 @@ jobs:
           npm --prefix server/frontend ci --ignore-scripts --no-audit --no-fund
           npm --prefix server/frontend run build
           npm --prefix server/backend ci --no-audit --no-fund
-          node scripts/prepare-host.mjs
           npm --prefix server/backend run acceptance
       - name: Check stable Node-API file locks
         run: |

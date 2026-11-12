@@ -71,8 +71,12 @@ native builds and smoke tests for Linux/macOS on x86_64/aarch64. It invokes each
 repository's existing packaging and release validation scripts. All checks and
 all eight packages must pass before release assembly. `release.json` records both
 source commits, Node version and asset checksums; `SHA256SUMS` covers every asset.
-Server's `host-release.json` remains its independent integration-test pin and is
-not silently rewritten by a release.
+Joint Server acceptance uses the Host package built from the selected commit in
+this run via `AOW_HOST_BINARY`. A release also contains `host-release.json` with
+all four Host checksums; after publication, copy that file into AoW to advance its
+independent development integration-test pin. The initial AoW branch still pins
+a legacy API v1 Host although its client requires API v2, so its existing
+development integration tests need that pin update after the first release.
 
 By default, dispatch only validates and uploads the `orbit-release` workflow
 artifact. Set `publish: true` on `main` to publish. Uploads are verified while the

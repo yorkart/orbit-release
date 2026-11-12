@@ -42,7 +42,7 @@ export function prepareGitHubRelease({version, revision, inputDir, outputDir}) {
     const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim();
     for (const platform of platforms) {
       const bundle = join(directory, `${role}-${platform}`); mkdirSync(bundle);
-      writeFileSync(join(bundle, 'manifest.json'), JSON.stringify({ git_revision: revision, runtime: { version: '24.22.2' } }));
+      writeFileSync(join(bundle, 'manifest.json'), JSON.stringify({ git_revision: revision, runtime: { version: '24.22.2' }, api_version: 2, daemon_version: '0.1.0' }));
       const name = role === 'server' ? `aow-${platform}.tar.gz` : `orbit-host-${version}-${platform}.tar.gz`;
       execFileSync('tar', ['-czf', join(input, name), '-C', bundle, '.']);
     }
@@ -56,6 +56,14 @@ test('assembly uses both product validators and records eight independently vers
   assert.equal(release.packages.length, 8);
   assert.notEqual(release.sources.server.revision, release.sources.host.revision);
   assert.equal(release.revision, f.revision);
+  const hostPin = JSON.parse(readFileSync(join(f.output, 'host-release.json')));
+  assert.equal(hostPin.repository, f.repository);
+  assert.equal(hostPin.revision, release.sources.host.revision);
+  assert.equal(hostPin.api_version, 2);
+  assert.deepEqual(Object.keys(hostPin.platforms), platforms);
+  for (const asset of release.packages.filter(asset => asset.role === 'host')) {
+    assert.deepEqual(hostPin.platforms[asset.platform], { asset: asset.asset, sha256: asset.sha256 });
+  }
   const sums = readFileSync(join(f.output, 'SHA256SUMS'), 'utf8').trim().split('\n');
   assert.equal(sums.length, readdirSync(f.output).length - 1);
   for (const line of sums) {
