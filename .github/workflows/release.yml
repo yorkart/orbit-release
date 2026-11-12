@@ -1,0 +1,555 @@
+name: Build and release Orbit
+'on':
+  workflow_dispatch:
+    inputs:
+      server_ref:
+        description: aow branch, tag or commit (resolved once)
+        type: string
+        required: true
+        default: feat/space-session-foundation
+      host_ref:
+        description: orbit-host branch, tag or commit (resolved once)
+        type: string
+        required: true
+        default: main
+      version:
+        description: Release tag (empty generates a unique tag)
+        type: string
+        required: false
+      publish:
+        description: Publish after validation (main only)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: orbit-release
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  tooling:
+    uses: ./.github/workflows/ci.yml
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      server: ${{ steps.sources.outputs.server }}
+      host: ${{ steps.sources.outputs.host }}
+      version: ${{ steps.sources.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/aow
+          ref: ${{ inputs.server_ref }}
+          path: aow
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/orbit-host
+          ref: ${{ inputs.host_ref }}
+          path: orbit-host
+          persist-credentials: false
+      - id: sources
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |-
+          server=$(git -C aow rev-parse HEAD)
+          host=$(git -C orbit-host rev-parse HEAD)
+          version=${REQUESTED_VERSION:-v$(date -u +%Y.%m.%d)-${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}}
+          [[ "$version" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]
+          cmp aow/.node-version orbit-host/.node-version
+          cmp .node-version aow/.node-version
+          cmp aow/scripts/share-node-runtime.mjs orbit-host/scripts/share-node-runtime.mjs
+          test -f aow/scripts/release-update.sh
+          test -f orbit-host/scripts/release-update.sh
+          printf 'server=%s\nhost=%s\nversion=%s\n' "$server" "$host" "$version" >> "$GITHUB_OUTPUT"
+  server-lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/aow
+          ref: ${{ needs.resolve.outputs.server }}
+          path: aow
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: aow/.node-version
+          cache: npm
+          cache-dependency-path: |-
+            aow/package-lock.json
+            aow/server/backend/package-lock.json
+            aow/server/frontend/package-lock.json
+      - name: Install lint tools
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix server/backend ci --ignore-scripts --no-audit --no-fund
+          npm --prefix server/frontend ci --ignore-scripts --no-audit --no-fund
+          python3 -m venv "$RUNNER_TEMP/lint-venv"
+          "$RUNNER_TEMP/lint-venv/bin/python" -m pip install --disable-pip-version-check -r scripts/lint/requirements.txt
+          echo "$RUNNER_TEMP/lint-venv/bin" >> "$GITHUB_PATH"
+          curl --fail --silent --show-error --location --retry 3 https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz --output "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP/lint-venv/bin" actionlint
+      - name: Lint TypeScript, JavaScript, CSS, HTML, configuration and Markdown
+        run: |
+          npm run lint
+          npm run test:lint
+      - name: Lint Python
+        run: npm run lint:python
+      - name: Lint shell scripts and extensionless launchers
+        run: npm run lint:shell
+      - name: Lint YAML and GitHub Actions
+        run: |
+          npm run lint:yaml
+          npm run lint:workflows
+    needs: resolve
+    defaults:
+      run:
+        working-directory: aow
+  server-test:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/aow
+          ref: ${{ needs.resolve.outputs.server }}
+          path: aow
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: aow/.node-version
+          cache: npm
+          cache-dependency-path: |-
+            aow/server/backend/package-lock.json
+            aow/server/frontend/package-lock.json
+      - name: Test Git platform providers
+        run: node --test server/git-platform-providers/tests/*.test.mjs
+      - name: Cache verified independent Host release
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: aow/target/host/
+          key: orbit-host-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('aow/host-release.json') }}
+      - name: Validate TypeScript backend
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          npm --prefix server/frontend ci --ignore-scripts --no-audit --no-fund
+          npm --prefix server/frontend run build
+          npm --prefix server/backend ci --no-audit --no-fund
+          node scripts/prepare-host.mjs
+          npm --prefix server/backend run acceptance
+      - name: Check stable Node-API file locks
+        run: |
+          node server/backend/scripts/build-native.mjs --check
+          node scripts/check-node-api.mjs server/backend
+      - name: Validate real macOS service lifecycle and file logs
+        if: runner.os == 'macOS'
+        env:
+          AOW_NATIVE_SERVICE_TESTS: '1'
+          RUST_LOG: info
+        run: node --test scripts/tests/launchd-native.test.mjs
+    defaults:
+      run:
+        working-directory: aow
+  server-test-scripts:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/aow
+          ref: ${{ needs.resolve.outputs.server }}
+          path: aow
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: aow/.node-version
+      - name: Test packaging, installers and service lifecycle
+        run: node --test scripts/tests/*.test.mjs
+    needs: resolve
+    defaults:
+      run:
+        working-directory: aow
+  server-frontend:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/aow
+          ref: ${{ needs.resolve.outputs.server }}
+          path: aow
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: aow/.node-version
+          cache: npm
+          cache-dependency-path: aow/server/frontend/package-lock.json
+      - name: Build and check frontend
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          npm --prefix server/frontend ci --ignore-scripts --no-audit --no-fund
+          npm --prefix server/frontend run build
+          npm --prefix server/frontend run test:architecture
+      - name: Test Explorer search and file operations
+        working-directory: aow/server/frontend
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:explorer
+          npm run test:terminal-output
+          npm run test:terminal-history
+      - name: Upload shared web assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: web-assets
+          path: aow/server/frontend/dist/
+          if-no-files-found: error
+          retention-days: 1
+    defaults:
+      run:
+        working-directory: aow
+  host-lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/orbit-host
+          ref: ${{ needs.resolve.outputs.host }}
+          path: orbit-host
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: orbit-host/.node-version
+          cache: npm
+          cache-dependency-path: |-
+            orbit-host/package-lock.json
+            orbit-host/host/vt-worker/package-lock.json
+      - name: Install lint tools
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix host/vt-worker ci --ignore-scripts --no-audit --no-fund
+          python3 -m venv "$RUNNER_TEMP/lint-venv"
+          "$RUNNER_TEMP/lint-venv/bin/python" -m pip install --disable-pip-version-check -r scripts/lint/requirements.txt
+          echo "$RUNNER_TEMP/lint-venv/bin" >> "$GITHUB_PATH"
+          curl --fail --silent --show-error --location --retry 3 https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz --output "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP/lint-venv/bin" actionlint
+      - name: Lint JavaScript, configuration and Markdown
+        run: npm run lint
+      - name: Lint shell scripts and extensionless launchers
+        run: npm run lint:shell
+      - name: Lint YAML and GitHub Actions
+        run: |
+          npm run lint:yaml
+          npm run lint:workflows
+    needs: resolve
+    defaults:
+      run:
+        working-directory: orbit-host
+  host-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/orbit-host
+          ref: ${{ needs.resolve.outputs.host }}
+          path: orbit-host
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: orbit-host/.node-version
+          cache: npm
+          cache-dependency-path: orbit-host/host/vt-worker/package-lock.json
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt --no-self-update && rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: |-
+            orbit-host/common -> ../target
+            orbit-host/host -> ../target
+          shared-key: test-${{ matrix.runner }}
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Prepare bundled development runtime
+        run: node scripts/prepare-runtime.mjs
+      - name: Test VT worker
+        run: |
+          npm --prefix host/vt-worker ci --ignore-scripts --no-audit --no-fund
+          npm --prefix host/vt-worker test
+      - name: Test Host boundaries, JavaScript bridges and release scripts
+        run: node --test host/tests/*.test.mjs host/crates/agent-runtime-core/tests/*.test.mjs scripts/tests/*.test.mjs
+      - name: Test Rust workspaces
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            TMPDIR="$(node -p 'require("node:fs").realpathSync(require("node:os").tmpdir())')"
+            export TMPDIR
+          fi
+          cargo build --manifest-path host/Cargo.toml --example host-test-daemon --locked --target-dir target
+          cargo test --manifest-path common/Cargo.toml --workspace --locked --target-dir target
+          cargo test --manifest-path host/Cargo.toml --workspace --locked --target-dir target -- --test-threads=4
+      - name: Check Rust formatting and lint
+        run: |
+          cargo fmt --manifest-path common/Cargo.toml --all -- --check
+          cargo fmt --manifest-path host/Cargo.toml --all -- --check
+          cargo clippy --manifest-path common/Cargo.toml --workspace --all-targets --locked --target-dir target -- -D warnings
+          cargo clippy --manifest-path host/Cargo.toml --workspace --all-targets --locked --target-dir target -- -D warnings
+      - name: Check macOS C bridge
+        if: runner.os == 'macOS'
+        run: |
+          clang -Wall -Wextra -Werror -fsyntax-only common/crates/macos-log/src/os_log.c
+          clang --analyze -Xanalyzer -analyzer-output=text -Xanalyzer -analyzer-werror -Wall -Wextra -Werror common/crates/macos-log/src/os_log.c
+    needs: resolve
+    defaults:
+      run:
+        working-directory: orbit-host
+  server-build:
+    needs:
+      - resolve
+      - server-frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux-aarch64
+          - runner: macos-15-intel
+            platform: macos-x86_64
+          - runner: macos-15
+            platform: macos-aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+      RELEASE_PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/aow
+          ref: ${{ needs.resolve.outputs.server }}
+          path: aow
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 26.13.0
+      - name: Download shared web assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: web-assets
+          path: aow/server/frontend/dist/
+      - name: Build and validate Server package
+        run: |
+          package=$(bash scripts/package-release.sh --version "$RELEASE_VERSION" --skip-web-build --output-dir "$RUNNER_TEMP/aow-packages")
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          cp "$package" "$RUNNER_TEMP/release-assets/aow-$RELEASE_PLATFORM.tar.gz"
+      - name: Smoke test real macOS package with isolated services
+        if: runner.os == 'macOS'
+        env:
+          AOW_NATIVE_TEST_PACKAGE: ${{ runner.temp }}/release-assets/aow-${{ matrix.platform }}.tar.gz
+        run: node --test --test-name-pattern='real AoW macOS release' scripts/tests/macos-release.test.mjs
+      - name: Verify packaged Node-API locks with system Node 26
+        run: node scripts/check-node-api.mjs "$RUNNER_TEMP/release-assets/aow-${RELEASE_PLATFORM}.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: server-package-${{ matrix.platform }}
+          path: ${{ runner.temp }}/release-assets/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+    defaults:
+      run:
+        working-directory: aow
+  host-build:
+    needs:
+      - resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            platform: linux-aarch64
+            target: aarch64-unknown-linux-musl
+          - runner: macos-15-intel
+            platform: macos-x86_64
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            platform: macos-aarch64
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+      RELEASE_PLATFORM: ${{ matrix.platform }}
+      RUST_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/orbit-host
+          ref: ${{ needs.resolve.outputs.host }}
+          path: orbit-host
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: orbit-host/.node-version
+      - name: Set up Rust target
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+      - name: Set up musl compiler
+        if: runner.os == 'Linux'
+        run: |
+          case "$(dpkg --print-architecture)" in
+            amd64) ubuntu_host=archive.ubuntu.com; ubuntu_mirror=https://archive.ubuntu.com/ubuntu ;;
+            arm64) ubuntu_host=ports.ubuntu.com; ubuntu_mirror=https://ports.ubuntu.com/ubuntu-ports ;;
+            *) echo 'Unsupported musl build architecture' >&2; exit 1 ;;
+          esac
+          if ! timeout 15 getent ahostsv4 "$ubuntu_host" > /dev/null; then
+            ubuntu_interface=$(ip -4 route show default | awk 'NR == 1 { print $5 }')
+            test -n "$ubuntu_interface"
+            trap 'sudo resolvectl revert "$ubuntu_interface"' EXIT
+            sudo resolvectl dns "$ubuntu_interface" 1.1.1.1 8.8.8.8
+            sudo resolvectl flush-caches
+            timeout 15 getent ahostsv4 "$ubuntu_host"
+          fi
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            printf '%s\n' "$ubuntu_mirror" | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          fi
+          sudo apt-get -o Acquire::ForceIPv4=true -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update
+          sudo apt-get -o Acquire::ForceIPv4=true -o Acquire::Retries=3 install --yes musl-tools binutils
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: release-${{ matrix.platform }}
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: orbit-host/host -> ../target
+      - name: Build and smoke test independent Host package
+        env:
+          ORBIT_HOST_TEST_LAUNCHD: ${{ runner.os == 'macOS' && '1' || '0' }}
+        run: |
+          node scripts/package-release.mjs "$RELEASE_VERSION" "$RUNNER_TEMP/release-assets"
+          node scripts/smoke-package.mjs "$RUNNER_TEMP/release-assets/orbit-host-$RELEASE_VERSION-$RELEASE_PLATFORM.tar.gz"
+      - name: Verify local development packaging and installation
+        run: |
+          node scripts/local-package.mjs "" "$RUNNER_TEMP/local-packages"
+          HOME="$RUNNER_TEMP/local-install" bash scripts/install-local.sh "$RUNNER_TEMP/local-packages/latest" --no-start
+          "$RUNNER_TEMP/local-install/.local/bin/orbit-host" --help
+          "$RUNNER_TEMP/local-install/.local/lib/orbit-host/current/bin/aow-host-daemon" --version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: host-package-${{ matrix.platform }}
+          path: ${{ runner.temp }}/release-assets/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+    defaults:
+      run:
+        working-directory: orbit-host
+  publish:
+    needs:
+      - resolve
+      - assemble
+    if: inputs.publish && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .node-version
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: orbit-release
+          path: target/release
+      - name: Publish after all checks and all eight packages pass
+        run: bash scripts/publish-release.sh "$RELEASE_VERSION" "$GITHUB_SHA" target/release
+  assemble:
+    needs:
+      - tooling
+      - resolve
+      - server-lint
+      - server-test
+      - server-test-scripts
+      - server-frontend
+      - host-lint
+      - host-test
+      - server-build
+      - host-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/aow
+          ref: ${{ needs.resolve.outputs.server }}
+          path: aow
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/orbit-host
+          ref: ${{ needs.resolve.outputs.host }}
+          path: orbit-host
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .node-version
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: '*-package-*'
+          path: target/packages
+          merge-multiple: true
+      - name: Validate both products and prepare a complete immutable release
+        run: node scripts/prepare-release.mjs "$RELEASE_VERSION" "$GITHUB_SHA" "$GITHUB_REPOSITORY" aow orbit-host target/packages target/release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: orbit-release
+          path: target/release/
+          if-no-files-found: error
+          compression-level: 0
+    env:
+      RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
