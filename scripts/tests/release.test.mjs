@@ -111,4 +111,9 @@ esac
   writeFileSync(log, '');
   assert.notEqual(run({ PUBLISHED: '1' }).status, 0);
   assert.doesNotMatch(readFileSync(log, 'utf8'), /release upload|release edit/);
+  writeFileSync(log, '');
+  const candidate = run({ RELEASE_PRERELEASE: 'true' });
+  assert.equal(candidate.status, 0, candidate.stderr);
+  assert.match(readFileSync(log, 'utf8'), /release create .*--prerelease=true/);
+  assert.match(readFileSync(log, 'utf8'), /release edit .*--prerelease --latest=false/);
 });

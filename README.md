@@ -60,11 +60,11 @@ changes to that contract must be coordinated.
 
 ## Build and publish
 
-Run **Build and release Orbit** manually. Choose `server_ref` (initial default:
-`feat/space-session-foundation`), `host_ref` (default: `main`) and optionally a
+`sources.json` records immutable Server and Host commit SHAs. Run **Build and
+release Orbit** manually, optionally overriding `server_ref`, `host_ref` and a
 version starting with `v` followed by a digit. Branches/tags are resolved once to
-full commit SHAs before any matrix jobs start. Both source pins must match
-this repository's `.node-version`.
+full commit SHAs before any matrix jobs start. Both sources must match this
+repository's `.node-version`.
 
 The workflow runs source lint, Linux/macOS tests, package/installer regressions,
 native builds and smoke tests for Linux/macOS on x86_64/aarch64. It invokes each
@@ -74,17 +74,21 @@ source commits, Node version and asset checksums; `SHA256SUMS` covers every asse
 Joint Server acceptance uses the Host package built from the selected commit in
 this run via `AOW_HOST_BINARY`. A release also contains `host-release.json` with
 all four Host checksums; after publication, copy that file into AoW to advance its
-independent development integration-test pin. The initial AoW branch still pins
-a legacy API v1 Host although its client requires API v2, so its existing
-development integration tests need that pin update after the first release.
+independent development integration-test pin. The pin must match the Host API
+version required by the Server client.
 
 By default, dispatch only validates and uploads the `orbit-release` workflow
 artifact. Set `publish: true` on `main` to publish. Uploads are verified while the
 GitHub Release is still a draft; an existing published version cannot be replaced.
 Development repository merges do not trigger this workflow or wait for it.
 
-Rollout order: land the source-repository bridge changes, select their commits in
-a validation-only dispatch, then publish the first successful release. Existing
+For a release candidate, update `sources.json`, then push a new tag matching
+`v*-rc.*` (for example, `v2026.11.12-rc.1`). This runs the same complete matrix and
+publishes a prerelease only after every check passes. Candidates never change
+the stable `latest` release; install them with an explicit `--version`.
+
+Rollout order: push the source-repository bridge changes, pin their commits, then
+validate a release candidate before publishing a stable release. Existing
 branch protection rules referencing removed build/release jobs must be adjusted
 in the development repositories' settings. Source installation and release tests
 remain available locally and run here during release validation.
