@@ -76,14 +76,18 @@ all eight packages must pass before release assembly. `release.json` records bot
 source commits, Node version and asset checksums; `SHA256SUMS` covers every asset.
 Joint Server acceptance uses the Host package built from the selected commit in
 this run via `ORBIT_HOST_BINARY`. A release also contains `host-release.json` with
-all four Host checksums; after publication, copy that file into Orbit to advance its
-independent development integration-test pin. The pin must match the Host API
-version required by the Server client.
+all four Host checksums as distribution metadata. Neither product copies it back
+into its source repository. Server packages contain no Host release pin.
 
-By default, dispatch only validates and uploads the `orbit-release` workflow
-artifact. Set `publish: true` on `main` to publish. Uploads are verified while the
+By default, dispatch validates Linux x86_64 and ARM Mac production packages
+and uploads `joint-integration` with integration.json, both exact source SHAs and
+archive checksums. It creates no GitHub Release. Each validation run has its own
+concurrency group so unrelated source pairs can be checked in parallel. Set `publish: true` on `main` to publish. Uploads are verified while the
 GitHub Release is still a draft; an existing published version cannot be replaced.
-Development repository merges do not trigger this workflow or wait for it.
+Development repository merges do not publish. Integration-relevant PRs require
+a successful source-pair proof, but this workflow can validate unmerged commits
+and never waits for the product PR checks. Formal and RC publication always
+select the full four-platform/eight-package matrix.
 
 For a release candidate, update `sources.json`, then push a new tag matching
 `v*-rc.*` (for example, `v2026.11.12-rc.1`). This runs the same complete matrix and
@@ -95,11 +99,29 @@ Alternatively, push the release commit to a new branch named
 matching immutable tag when publishing the prerelease. This entry also works
 with clients that can update branches but cannot create tags or dispatch workflows.
 
-Rollout order: push the source-repository bridge changes, pin their commits, then
-validate a release candidate before publishing a stable release. Existing
+Development order: push both product branches, validate their exact commits with
+publish=false, merge the reviewed changes, then publish the selected source pair.
+There is no post-publication source edit or reverse pin synchronization. Existing
 branch protection rules referencing removed build/release jobs must be adjusted
 in the development repositories' settings. Source installation and release tests
 remain available locally and run here during release validation.
+
+## Validate concurrent product branches
+
+Dispatch Build and release Orbit with server_ref and host_ref selecting either
+branch or full commit SHA, and leave publish=false. References resolve once before
+building. An integration-validation/ branch is an equivalent unpublished trigger;
+its sources.json chooses the pair. This entry works before product PR checks pass.
+
+After all independent checks, actual packages and Linux/macOS acceptance pass,
+the workflow emits the successful job named Joint integration SERVER_SHA HOST_SHA.
+Server and Host CI check this public Actions metadata for their exact PR heads;
+they download no Host artifact. Their required test check aggregates independent
+and joint checks. Keep that test check required in product branch protection.
+Frontend/docs-only changes need no new joint proof; post-merge CI is independent.
+New integration-relevant commits require a new pair validation, with no pin edit.
+Only repository-authorized push/dispatch runs can supply a proof; fork PR runs and
+incomplete/failed proofs cannot admit a merge.
 
 ## Validate tooling locally
 

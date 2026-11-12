@@ -21,12 +21,13 @@ name: Build and release Orbit
   push:
     branches:
       - release-candidates/v*-rc.*
+      - integration-validation/**
     tags:
       - v*-rc.*
 permissions:
   contents: read
 concurrency:
-  group: orbit-release
+  group: ${{ (inputs.publish || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release-candidates/')) && 'orbit-release' || format('orbit-validation-{0}', github.run_id) }}
   cancel-in-progress: false
 defaults:
   run:
@@ -41,6 +42,8 @@ jobs:
       server: ${{ steps.sources.outputs.server }}
       host: ${{ steps.sources.outputs.host }}
       version: ${{ steps.sources.outputs.version }}
+      publishing: ${{ steps.plan.outputs.publishing }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -78,6 +81,10 @@ jobs:
           test -f orbit/scripts/release-update.sh
           test -f orbit-host/scripts/release-update.sh
           printf 'server=%s\nhost=%s\nversion=%s\n' "$server" "$host" "$version" >> "$GITHUB_OUTPUT"
+      - id: plan
+        env:
+          PUBLISH_REQUEST: ${{ inputs.publish }}
+        run: node scripts/release-plan.mjs >> "$GITHUB_OUTPUT"
   server-lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -132,7 +139,7 @@ jobs:
       matrix:
         runner:
           - ubuntu-24.04
-          - macos-15
+          - macos-26
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     steps:
@@ -190,7 +197,7 @@ jobs:
       matrix:
         runner:
           - ubuntu-24.04
-          - macos-15
+          - macos-26
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
@@ -294,7 +301,7 @@ jobs:
       matrix:
         runner:
           - ubuntu-24.04
-          - macos-15
+          - macos-26
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     steps:
@@ -357,16 +364,7 @@ jobs:
       - server-frontend
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            platform: linux-x86_64
-          - runner: ubuntu-24.04-arm
-            platform: linux-aarch64
-          - runner: macos-15-intel
-            platform: macos-x86_64
-          - runner: macos-15
-            platform: macos-aarch64
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -414,20 +412,7 @@ jobs:
       - resolve
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            platform: linux-x86_64
-            target: x86_64-unknown-linux-musl
-          - runner: ubuntu-24.04-arm
-            platform: linux-aarch64
-            target: aarch64-unknown-linux-musl
-          - runner: macos-15-intel
-            platform: macos-x86_64
-            target: x86_64-apple-darwin
-          - runner: macos-15
-            platform: macos-aarch64
-            target: aarch64-apple-darwin
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -502,7 +487,7 @@ jobs:
     needs:
       - resolve
       - assemble
-    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release-candidates/') || (inputs.publish && github.ref == 'refs/heads/main')
+    if: needs.resolve.outputs.publishing == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -526,9 +511,11 @@ jobs:
       - name: Publish after all checks and all eight packages pass
         run: bash scripts/publish-release.sh "$RELEASE_VERSION" "$GITHUB_SHA" target/release
   assemble:
+    if: needs.resolve.outputs.publishing == 'true'
     needs:
       - tooling
       - resolve
+      - joint-integration
       - server-lint
       - server-test
       - server-test-scripts
@@ -573,3 +560,34 @@ jobs:
           compression-level: 0
     env:
       RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+  joint-integration:
+    name: Joint integration ${{ needs.resolve.outputs.server }} ${{ needs.resolve.outputs.host }}
+    needs: [resolve, tooling, server-lint, server-test, server-test-scripts, server-frontend, host-lint, host-test, server-build, host-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .node-version
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: '*-package-*'
+          path: target/integration-packages
+          merge-multiple: true
+      - name: Record the exact tested source pair and archive checksums
+        env:
+          SERVER_REVISION: ${{ needs.resolve.outputs.server }}
+          HOST_REVISION: ${{ needs.resolve.outputs.host }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+          BUILD_MATRIX: ${{ needs.resolve.outputs.matrix }}
+        run: |
+          node scripts/integration-proof.mjs "$SERVER_REVISION" "$HOST_REVISION" "$RELEASE_VERSION" target/integration-packages target/integration.json "$BUILD_MATRIX"
+          printf 'Verified Server %s with Host %s.\n' "$SERVER_REVISION" "$HOST_REVISION" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: joint-integration
+          path: target/integration.json
+          if-no-files-found: error
