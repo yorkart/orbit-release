@@ -33,6 +33,7 @@ jobs:
   tooling:
     uses: ./.github/workflows/ci.yml
   resolve:
+    needs: tooling
     runs-on: ubuntu-24.04
     outputs:
       server: ${{ steps.sources.outputs.server }}
