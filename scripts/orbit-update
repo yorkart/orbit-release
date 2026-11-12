@@ -5,7 +5,7 @@ stage=
 trap '[[ -z "$stage" ]] || rm -rf -- "$stage"' EXIT
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 main() {
-    local role=server version='' repository=${ORBIT_RELEASE_REPOSITORY:-${AOW_RELEASE_REPOSITORY:-}}
+    local role=server version='' repository=${ORBIT_RELEASE_REPOSITORY:-}
     local -a options=()
     while (( $# )); do
         case "$1" in
@@ -24,9 +24,9 @@ main() {
     [[ -z "$version" || "$version" =~ ^v[0-9][A-Za-z0-9._-]*$ ]] || fail 'invalid version'
     local root=${HOME:?HOME must be set}/.local/lib config runtime
     if [[ "$role" == server ]]; then
-        [[ ${AOW_INSTALL_ROOT:-$root/aow} == "$root/aow" ]] || fail 'unsupported AOW_INSTALL_ROOT'
-        config=$root/aow/update.json
-        runtime=$root/aow/latest/backend/node
+        [[ ${ORBIT_INSTALL_ROOT:-$root/orbit} == "$root/orbit" ]] || fail 'unsupported ORBIT_INSTALL_ROOT'
+        config=$root/orbit/update.json
+        runtime=$root/orbit/latest/backend/node
     else
         config=$root/orbit-host/installation.json
         runtime=$root/orbit-host/current/runtime/node
@@ -44,17 +44,17 @@ JS
         # Migrate the old development-repository update source once. Explicit
         # repository selections continue to support forks and test releases.
         if [[ -z "$repository" ]]; then
-            case "$saved" in yorkart/aow|yorkart/orbit-host) ;; *) repository=$saved ;; esac
+            case "$saved" in yorkart/orbit|yorkart/orbit-host) ;; *) repository=$saved ;; esac
         fi
-        if [[ "$role" == server && -z ${AOW_USER_BIN_DIR:-} ]]; then
-            AOW_USER_BIN_DIR=$("$runtime" --input-type=module - "$config" <<'JS'
+        if [[ "$role" == server && -z ${ORBIT_USER_BIN_DIR:-} ]]; then
+            ORBIT_USER_BIN_DIR=$("$runtime" --input-type=module - "$config" <<'JS'
 import { readFileSync } from 'node:fs';
 const value = JSON.parse(readFileSync(process.argv[2], 'utf8')).user_bin_dir;
 if (value != null && (typeof value !== 'string' || !value.startsWith('/'))) throw new Error('invalid command directory');
 process.stdout.write(value || '');
 JS
 )
-            export AOW_USER_BIN_DIR
+            export ORBIT_USER_BIN_DIR
         fi
     fi
     repository=${repository:-yorkart/orbit-release}
