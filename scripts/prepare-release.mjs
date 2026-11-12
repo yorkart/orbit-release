@@ -30,13 +30,13 @@ export async function prepareRelease({ version, revision, repository, server, ho
         if (name.endsWith('.tar.gz')) copyFileSync(join(stage, role, name), join(stage, name));
       }
     }
-    copyFileSync(join(stage, 'server/aow-install.sh'), join(stage, 'server-installer.sh'));
+    copyFileSync(join(stage, 'server/orbit-install.sh'), join(stage, 'server-installer.sh'));
     copyFileSync(join(stage, 'host/install.sh'), join(stage, 'host-installer.sh'));
     for (const role of ['server', 'host']) rmSync(join(stage, role), { recursive: true });
     const packages = [];
     const hostPin = { repository, version, revision: hostSource.revision, platforms: {} };
     for (const platform of platforms) {
-      for (const [role, name, spec] of [['server', `aow-${platform}.tar.gz`, serverSource],
+      for (const [role, name, spec] of [['server', `orbit-${platform}.tar.gz`, serverSource],
         ['host', `orbit-host-${version}-${platform}.tar.gz`, hostSource]]) {
         const manifest = JSON.parse(execFileSync('tar', ['-xOzf', join(stage, name), './manifest.json'], { encoding: 'utf8' }));
         if (manifest.runtime?.version !== spec.node) throw new Error(`Runtime pin mismatch: ${name}`);
@@ -57,14 +57,14 @@ export async function prepareRelease({ version, revision, repository, server, ho
     const installer = readFileSync(join(root, 'install.sh'), 'utf8')
       .replace(/^DEFAULT_REPOSITORY=.*$/m, `DEFAULT_REPOSITORY='${repository}'`)
       .replace(/^DEFAULT_VERSION=.*$/m, `DEFAULT_VERSION='${version}'`);
-    for (const [name, role] of [['orbit-install.sh', ''], ['aow-install.sh', 'server'], ['install.sh', 'host']]) {
+    for (const [name, role] of [['orbit-install.sh', ''], ['install.sh', 'host']]) {
       writeFileSync(join(stage, name), installer.replace(/^DEFAULT_ROLE=.*$/m, `DEFAULT_ROLE='${role}'`), { mode: 0o755 });
       execFileSync('bash', ['-n', join(stage, name)]);
     }
     copyFileSync(join(root, 'scripts/orbit-update'), join(stage, 'orbit-update'));
     writeFileSync(join(stage, 'host-release.json'), `${JSON.stringify(hostPin, null, 2)}\n`);
     writeFileSync(join(stage, 'release.json'), `${JSON.stringify({ version, revision, repository,
-      sources: { server: { repository: 'yorkart/aow', ...serverSource }, host: { repository: 'yorkart/orbit-host', ...hostSource } },
+      sources: { server: { repository: 'yorkart/orbit', ...serverSource }, host: { repository: 'yorkart/orbit-host', ...hostSource } },
       packages }, null, 2)}\n`);
     writeFileSync(join(stage, 'SHA256SUMS'), readdirSync(stage).sort().map(name => `${hash(join(stage, name))}  ${name}\n`).join(''));
     renameSync(stage, output);

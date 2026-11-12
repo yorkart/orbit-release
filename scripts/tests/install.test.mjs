@@ -18,7 +18,7 @@ function fixture(t) {
   put('orbit-update', readFileSync(join(root, 'scripts/orbit-update')));
   for (const role of ['server', 'host']) put(`${role}-installer.sh`, `#!/bin/bash
 printf '%s\\n' '${role}' "$@" >> "$HOME/installed"
-printf '%s\\n' "\${AOW_USER_BIN_DIR:-}" > "$HOME/user-bin"
+printf '%s\\n' "\${ORBIT_USER_BIN_DIR:-}" > "$HOME/user-bin"
 exit "\${INSTALL_STATUS:-0}"
 `);
   const sums = () => put('SHA256SUMS', ['server-installer.sh', 'host-installer.sh', 'orbit-update'].map(name =>
@@ -41,11 +41,11 @@ if (( head )); then printf '%s/tag/v2.0.0' "\${url%/latest}"; exit; fi
 cp "$HOME/assets/\${url##*/}" "$output"
 `, { mode: 0o755 });
   const run = (script, args, extra = {}) => spawnSync('bash', [join(root, script), ...args], {
-    env: { ...process.env, HOME: home, PATH: `${tools}:${process.env.PATH}`, ORBIT_RELEASE_REPOSITORY: '', AOW_RELEASE_REPOSITORY: '',
-      AOW_INSTALL_ROOT: '', AOW_USER_BIN_DIR: '', ...extra }, encoding: 'utf8', timeout: 10000,
+    env: { ...process.env, HOME: home, PATH: `${tools}:${process.env.PATH}`, ORBIT_RELEASE_REPOSITORY: '',
+      ORBIT_INSTALL_ROOT: '', ORBIT_USER_BIN_DIR: '', ...extra }, encoding: 'utf8', timeout: 10000,
   });
   const saved = (role, repository) => {
-    const directory = join(home, '.local/lib', role === 'server' ? 'aow' : 'orbit-host');
+    const directory = join(home, '.local/lib', role === 'server' ? 'orbit' : 'orbit-host');
     const runtime = join(directory, role === 'server' ? 'latest/backend/node' : 'current/runtime/node');
     mkdirSync(dirname(runtime), { recursive: true }); symlinkSync(process.execPath, runtime);
     writeFileSync(join(directory, role === 'server' ? 'update.json' : 'installation.json'), JSON.stringify({ repository, user_bin_dir: `${home}/custom bin` }));
@@ -89,7 +89,7 @@ for (const failure of ['checksum', 'duplicate', 'download', 'install']) {
 }
 
 test('update migrates legacy repository and preserves a custom command directory', t => {
-  const f = fixture(t); f.saved('server', 'yorkart/aow');
+  const f = fixture(t); f.saved('server', 'yorkart/orbit');
   const result = f.run('scripts/orbit-update', ['--role', 'server']);
   assert.equal(result.status, 0, result.stderr);
   assert.match(f.read('downloads'), /^https:\/\/github.com\/yorkart\/orbit-release\//);
@@ -117,10 +117,10 @@ test('explicit update repository overrides environment and saved settings', t =>
 for (const content of ['', 'if\n']) {
   test(`update rejects an ${content ? 'invalid' : 'empty'} downloaded installer before installation`, t => {
     const f = fixture(t); f.saved('server', 'yorkart/orbit-release');
-    const before = f.read('.local/lib/aow/update.json');
+    const before = f.read('.local/lib/orbit/update.json');
     f.put('orbit-install.sh', content);
     assert.notEqual(f.run('scripts/orbit-update', ['--repo', 'replacement/release']).status, 0);
-    assert.equal(f.read('.local/lib/aow/update.json'), before);
+    assert.equal(f.read('.local/lib/orbit/update.json'), before);
     assert.equal(existsSync(join(f.home, 'installed')), false);
   });
 }

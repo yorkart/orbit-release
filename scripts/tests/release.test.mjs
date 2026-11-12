@@ -28,12 +28,12 @@ import { join } from 'node:path';
 export function prepareGitHubRelease({version, revision, inputDir, outputDir}) {
   mkdirSync(outputDir);
   for (const platform of ${JSON.stringify(platforms)}) {
-    const name = ${JSON.stringify(role)} === 'server' ? 'aow-' + platform + '.tar.gz' : 'orbit-host-' + version + '-' + platform + '.tar.gz';
+    const name = ${JSON.stringify(role)} === 'server' ? 'orbit-' + platform + '.tar.gz' : 'orbit-host-' + version + '-' + platform + '.tar.gz';
     const manifest = JSON.parse(execFileSync('tar', ['-xOzf', join(inputDir,name), './manifest.json'], {encoding:'utf8'}));
     if (manifest.git_revision !== revision) throw new Error('wrong source revision');
     copyFileSync(join(inputDir,name), join(outputDir,name));
   }
-  writeFileSync(join(outputDir, ${JSON.stringify(role === 'server' ? 'aow-install.sh' : 'install.sh')}), '#!/bin/bash\\n# product installer\\nexit 0\\n');
+  writeFileSync(join(outputDir, ${JSON.stringify(role === 'server' ? 'orbit-install.sh' : 'install.sh')}), '#!/bin/bash\\n# product installer\\nexit 0\\n');
 }
 `);
     for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', role]]) {
@@ -43,7 +43,7 @@ export function prepareGitHubRelease({version, revision, inputDir, outputDir}) {
     for (const platform of platforms) {
       const bundle = join(directory, `${role}-${platform}`); mkdirSync(bundle);
       writeFileSync(join(bundle, 'manifest.json'), JSON.stringify({ git_revision: revision, runtime: { version: '24.22.2' }, api_version: 2, daemon_version: '0.1.0' }));
-      const name = role === 'server' ? `aow-${platform}.tar.gz` : `orbit-host-${version}-${platform}.tar.gz`;
+      const name = role === 'server' ? `orbit-${platform}.tar.gz` : `orbit-host-${version}-${platform}.tar.gz`;
       execFileSync('tar', ['-czf', join(input, name), '-C', bundle, '.']);
     }
   }
@@ -71,7 +71,7 @@ test('assembly uses both product validators and records eight independently vers
     assert.equal(createHash('sha256').update(readFileSync(join(f.output, name))).digest('hex'), hash);
   }
   assert.match(readFileSync(join(f.output, 'orbit-install.sh'), 'utf8'), /DEFAULT_VERSION='v2026-test'/);
-  assert.match(readFileSync(join(f.output, 'aow-install.sh'), 'utf8'), /DEFAULT_ROLE='server'/);
+  assert.match(readFileSync(join(f.output, 'orbit-install.sh'), 'utf8'), /DEFAULT_ROLE=''/);
   assert.match(readFileSync(join(f.output, 'install.sh'), 'utf8'), /DEFAULT_ROLE='host'/);
   assert.match(readFileSync(join(f.output, 'server-installer.sh'), 'utf8'), /product installer/);
   await assert.rejects(prepareRelease(f), /already exists/);

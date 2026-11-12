@@ -53,9 +53,9 @@ jobs:
         run: node scripts/source-refs.mjs
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          repository: yorkart/aow
+          repository: yorkart/orbit
           ref: ${{ steps.refs.outputs.server }}
-          path: aow
+          path: orbit
           persist-credentials: false
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -67,15 +67,15 @@ jobs:
         env:
           REQUESTED_VERSION: ${{ (github.ref_type == 'tag' || startsWith(github.ref, 'refs/heads/release-candidates/')) && github.ref_name || inputs.version }}
         run: |-
-          server=$(git -C aow rev-parse HEAD)
+          server=$(git -C orbit rev-parse HEAD)
           host=$(git -C orbit-host rev-parse HEAD)
           version=${REQUESTED_VERSION#release-candidates/}
           version=${version:-v$(date -u +%Y.%m.%d)-${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}}
           [[ "$version" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]
-          cmp aow/.node-version orbit-host/.node-version
-          cmp .node-version aow/.node-version
-          cmp aow/scripts/share-node-runtime.mjs orbit-host/scripts/share-node-runtime.mjs
-          test -f aow/scripts/release-update.sh
+          cmp orbit/.node-version orbit-host/.node-version
+          cmp .node-version orbit/.node-version
+          cmp orbit/scripts/share-node-runtime.mjs orbit-host/scripts/share-node-runtime.mjs
+          test -f orbit/scripts/release-update.sh
           test -f orbit-host/scripts/release-update.sh
           printf 'server=%s\nhost=%s\nversion=%s\n' "$server" "$host" "$version" >> "$GITHUB_OUTPUT"
   server-lint:
@@ -84,18 +84,18 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          repository: yorkart/aow
+          repository: yorkart/orbit
           ref: ${{ needs.resolve.outputs.server }}
-          path: aow
+          path: orbit
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version-file: aow/.node-version
+          node-version-file: orbit/.node-version
           cache: npm
           cache-dependency-path: |-
-            aow/package-lock.json
-            aow/server/backend/package-lock.json
-            aow/server/frontend/package-lock.json
+            orbit/package-lock.json
+            orbit/server/backend/package-lock.json
+            orbit/server/frontend/package-lock.json
       - name: Install lint tools
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
@@ -122,7 +122,7 @@ jobs:
     needs: resolve
     defaults:
       run:
-        working-directory: aow
+        working-directory: orbit
   server-test:
     needs:
       - resolve
@@ -138,17 +138,17 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          repository: yorkart/aow
+          repository: yorkart/orbit
           ref: ${{ needs.resolve.outputs.server }}
-          path: aow
+          path: orbit
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version-file: aow/.node-version
+          node-version-file: orbit/.node-version
           cache: npm
           cache-dependency-path: |-
-            aow/server/backend/package-lock.json
-            aow/server/frontend/package-lock.json
+            orbit/server/backend/package-lock.json
+            orbit/server/frontend/package-lock.json
       - name: Test Git platform providers
         run: node --test server/git-platform-providers/tests/*.test.mjs
       - name: Download this release candidate Host
@@ -162,7 +162,7 @@ jobs:
           archives=("$RUNNER_TEMP/integration-host-archive/"*.tar.gz)
           [[ ${#archives[@]} == 1 ]]
           tar -xzf "${archives[0]}" -C "$RUNNER_TEMP/integration-host"
-          echo "AOW_HOST_BINARY=$RUNNER_TEMP/integration-host/bin/aow-host-daemon" >> "$GITHUB_ENV"
+          echo "ORBIT_HOST_BINARY=$RUNNER_TEMP/integration-host/bin/orbit-host-daemon" >> "$GITHUB_ENV"
       - name: Validate TypeScript backend
         env:
           NODE_OPTIONS: --max-old-space-size=4096
@@ -178,12 +178,12 @@ jobs:
       - name: Validate real macOS service lifecycle and file logs
         if: runner.os == 'macOS'
         env:
-          AOW_NATIVE_SERVICE_TESTS: '1'
+          ORBIT_NATIVE_SERVICE_TESTS: '1'
           RUST_LOG: info
         run: node --test scripts/tests/launchd-native.test.mjs
     defaults:
       run:
-        working-directory: aow
+        working-directory: orbit
   server-test-scripts:
     strategy:
       fail-fast: false
@@ -196,19 +196,19 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          repository: yorkart/aow
+          repository: yorkart/orbit
           ref: ${{ needs.resolve.outputs.server }}
-          path: aow
+          path: orbit
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version-file: aow/.node-version
+          node-version-file: orbit/.node-version
       - name: Test packaging, installers and service lifecycle
         run: node --test scripts/tests/*.test.mjs
     needs: resolve
     defaults:
       run:
-        working-directory: aow
+        working-directory: orbit
   server-frontend:
     needs: resolve
     runs-on: ubuntu-24.04
@@ -216,15 +216,15 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          repository: yorkart/aow
+          repository: yorkart/orbit
           ref: ${{ needs.resolve.outputs.server }}
-          path: aow
+          path: orbit
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version-file: aow/.node-version
+          node-version-file: orbit/.node-version
           cache: npm
-          cache-dependency-path: aow/server/frontend/package-lock.json
+          cache-dependency-path: orbit/server/frontend/package-lock.json
       - name: Build and check frontend
         env:
           NODE_OPTIONS: --max-old-space-size=4096
@@ -233,7 +233,7 @@ jobs:
           npm --prefix server/frontend run build
           npm --prefix server/frontend run test:architecture
       - name: Test Explorer search and file operations
-        working-directory: aow/server/frontend
+        working-directory: orbit/server/frontend
         run: |
           npx playwright install --with-deps chromium
           npm run test:explorer
@@ -243,12 +243,12 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: web-assets
-          path: aow/server/frontend/dist/
+          path: orbit/server/frontend/dist/
           if-no-files-found: error
           retention-days: 1
     defaults:
       run:
-        working-directory: aow
+        working-directory: orbit
   host-lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -375,9 +375,9 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          repository: yorkart/aow
+          repository: yorkart/orbit
           ref: ${{ needs.resolve.outputs.server }}
-          path: aow
+          path: orbit
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
@@ -386,19 +386,19 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: web-assets
-          path: aow/server/frontend/dist/
+          path: orbit/server/frontend/dist/
       - name: Build and validate Server package
         run: |
-          package=$(bash scripts/package-release.sh --version "$RELEASE_VERSION" --skip-web-build --output-dir "$RUNNER_TEMP/aow-packages")
+          package=$(bash scripts/package-release.sh --version "$RELEASE_VERSION" --skip-web-build --output-dir "$RUNNER_TEMP/orbit-packages")
           mkdir -p "$RUNNER_TEMP/release-assets"
-          cp "$package" "$RUNNER_TEMP/release-assets/aow-$RELEASE_PLATFORM.tar.gz"
+          cp "$package" "$RUNNER_TEMP/release-assets/orbit-$RELEASE_PLATFORM.tar.gz"
       - name: Smoke test real macOS package with isolated services
         if: runner.os == 'macOS'
         env:
-          AOW_NATIVE_TEST_PACKAGE: ${{ runner.temp }}/release-assets/aow-${{ matrix.platform }}.tar.gz
-        run: node --test --test-name-pattern='real AoW macOS release' scripts/tests/macos-release.test.mjs
+          ORBIT_NATIVE_TEST_PACKAGE: ${{ runner.temp }}/release-assets/orbit-${{ matrix.platform }}.tar.gz
+        run: node --test --test-name-pattern='real Orbit macOS release' scripts/tests/macos-release.test.mjs
       - name: Verify packaged Node-API locks with system Node 26
-        run: node scripts/check-node-api.mjs "$RUNNER_TEMP/release-assets/aow-${RELEASE_PLATFORM}.tar.gz"
+        run: node scripts/check-node-api.mjs "$RUNNER_TEMP/release-assets/orbit-${RELEASE_PLATFORM}.tar.gz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: server-package-${{ matrix.platform }}
@@ -408,7 +408,7 @@ jobs:
           compression-level: 0
     defaults:
       run:
-        working-directory: aow
+        working-directory: orbit
   host-build:
     needs:
       - resolve
@@ -487,7 +487,7 @@ jobs:
           node scripts/local-package.mjs "" "$RUNNER_TEMP/local-packages"
           HOME="$RUNNER_TEMP/local-install" bash scripts/install-local.sh "$RUNNER_TEMP/local-packages/latest" --no-start
           "$RUNNER_TEMP/local-install/.local/bin/orbit-host" --help
-          "$RUNNER_TEMP/local-install/.local/lib/orbit-host/current/bin/aow-host-daemon" --version
+          "$RUNNER_TEMP/local-install/.local/lib/orbit-host/current/bin/orbit-host-daemon" --version
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: host-package-${{ matrix.platform }}
@@ -545,9 +545,9 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          repository: yorkart/aow
+          repository: yorkart/orbit
           ref: ${{ needs.resolve.outputs.server }}
-          path: aow
+          path: orbit
           persist-credentials: false
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -564,7 +564,7 @@ jobs:
           path: target/packages
           merge-multiple: true
       - name: Validate both products and prepare a complete immutable release
-        run: node scripts/prepare-release.mjs "$RELEASE_VERSION" "$GITHUB_SHA" "$GITHUB_REPOSITORY" aow orbit-host target/packages target/release
+        run: node scripts/prepare-release.mjs "$RELEASE_VERSION" "$GITHUB_SHA" "$GITHUB_REPOSITORY" orbit orbit-host target/packages target/release
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: orbit-release

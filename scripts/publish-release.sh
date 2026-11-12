@@ -9,9 +9,9 @@ prerelease=${RELEASE_PRERELEASE:-false}
 : "${GH_REPO:?GH_REPO must name OWNER/REPO}"
 [[ "$version" =~ ^v[0-9][A-Za-z0-9._-]*$ && "$revision" =~ ^[a-f0-9]{40}$ ]]
 for platform in linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64; do
-    [[ -s "$assets/aow-$platform.tar.gz" && -s "$assets/orbit-host-$version-$platform.tar.gz" ]]
+    [[ -s "$assets/orbit-$platform.tar.gz" && -s "$assets/orbit-host-$version-$platform.tar.gz" ]]
 done
-for file in release.json host-release.json SHA256SUMS orbit-install.sh server-installer.sh host-installer.sh orbit-update aow-install.sh install.sh; do
+for file in release.json host-release.json SHA256SUMS orbit-install.sh server-installer.sh host-installer.sh orbit-update orbit-install.sh install.sh; do
     [[ -s "$assets/$file" ]]
 done
 (cd "$assets" && shasum -a 256 -c SHA256SUMS)
