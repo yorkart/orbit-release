@@ -1,0 +1,201 @@
+name: Recover Orbit rc.4 release
+on:
+  push:
+    branches:
+      - release-recovery/v2026.11.12-rc.4
+permissions:
+  contents: read
+  actions: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: orbit-rc4-recovery
+  cancel-in-progress: false
+env:
+  RELEASE_VERSION: v2026.11.12-rc.4
+  SOURCE_RUN: '43247821688'
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    outputs:
+      server: ${{ steps.pins.outputs.server }}
+      host: ${{ steps.pins.outputs.host }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Verify previously completed source checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$RUNNER_TEMP/source-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/source-jobs.json"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const run = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/source-run.json`));
+          assert.equal(run.head_sha, '7403b654b330abadbc6d6b869d49af64d3cea028');
+          const pins = JSON.parse(readFileSync('sources.json'));
+          assert.equal(pins.server, '5607e7de9b8df2dfa75d39864c09f355194259f4');
+          assert.equal(pins.host, 'f0b60495c29c06ff9a9a0d1bc35229910e0e3593');
+          const { jobs } = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/source-jobs.json`));
+          const required = ['tooling / tooling', 'resolve', 'server-lint', 'host-lint', 'server-frontend',
+            'server-test-scripts (ubuntu-24.04)', 'server-test-scripts (macos-15)',
+            'host-test (ubuntu-24.04)', 'host-test (macos-15)',
+            'host-build (ubuntu-24.04, linux-x86_64, x86_64-unknown-linux-musl)',
+            'host-build (ubuntu-24.04-arm, linux-aarch64, aarch64-unknown-linux-musl)',
+            'host-build (macos-15-intel, macos-x86_64, x86_64-apple-darwin)',
+            'server-build (ubuntu-24.04, linux-x86_64)', 'server-build (ubuntu-24.04-arm, linux-aarch64)',
+            'server-build (macos-15-intel, macos-x86_64)', 'server-build (macos-15, macos-aarch64)'];
+          for (const name of required) assert.equal(jobs.find(job => job.name === name)?.conclusion, 'success', name);
+          JS
+      - id: pins
+        run: node scripts/source-refs.mjs
+  host-arm:
+    needs: verify
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/orbit-host
+          ref: ${{ needs.verify.outputs.host }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .node-version
+      - name: Set up Rust target
+        run: |
+          test "$(uname -m)" = arm64
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add aarch64-apple-darwin
+      - name: Build and smoke test the pinned ARM64 Host
+        env:
+          ORBIT_HOST_TEST_LAUNCHD: '1'
+        run: |
+          node scripts/package-release.mjs "$RELEASE_VERSION" "$RUNNER_TEMP/release-assets"
+          node scripts/smoke-package.mjs "$RUNNER_TEMP/release-assets/orbit-host-$RELEASE_VERSION-macos-aarch64.tar.gz"
+      - name: Verify local packaging and installation
+        run: |
+          node scripts/local-package.mjs "" "$RUNNER_TEMP/local-packages"
+          HOME="$RUNNER_TEMP/local-install" bash scripts/install-local.sh "$RUNNER_TEMP/local-packages/latest" --no-start
+          "$RUNNER_TEMP/local-install/.local/bin/orbit-host" --help
+          "$RUNNER_TEMP/local-install/.local/lib/orbit-host/current/bin/orbit-host-daemon" --version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: host-package-macos-aarch64
+          path: ${{ runner.temp }}/release-assets/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+  integration:
+    needs:
+      - verify
+      - host-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/orbit
+          ref: ${{ needs.verify.outputs.server }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .node-version
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: web-assets
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+          path: server/frontend/dist
+      - name: Download verified Linux Host
+        if: runner.os == 'Linux'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: host-package-linux-x86_64
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/host-archive
+      - name: Download verified ARM64 Mac Host
+        if: runner.os == 'macOS'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: host-package-macos-aarch64
+          path: ${{ runner.temp }}/host-archive
+      - name: Select the pinned Host package
+        run: |
+          mkdir -p "$RUNNER_TEMP/integration-host"
+          archives=("$RUNNER_TEMP/host-archive/"*.tar.gz)
+          [[ ${#archives[@]} == 1 ]]
+          tar -xzf "${archives[0]}" -C "$RUNNER_TEMP/integration-host"
+          echo "ORBIT_HOST_BINARY=$RUNNER_TEMP/integration-host/bin/orbit-host-daemon" >> "$GITHUB_ENV"
+      - name: Run backend acceptance and native ABI checks
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          node --test server/git-platform-providers/tests/*.test.mjs
+          npm --prefix server/backend ci --no-audit --no-fund
+          npm --prefix server/backend run acceptance
+          node server/backend/scripts/build-native.mjs --check
+          node scripts/check-node-api.mjs server/backend
+      - name: Validate real macOS service lifecycle
+        if: runner.os == 'macOS'
+        env:
+          ORBIT_NATIVE_SERVICE_TESTS: '1'
+          RUST_LOG: info
+        run: node --test scripts/tests/launchd-native.test.mjs
+  publish:
+    needs:
+      - verify
+      - host-arm
+      - integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_PRERELEASE: 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/orbit
+          ref: ${{ needs.verify.outputs.server }}
+          path: orbit
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: yorkart/orbit-host
+          ref: ${{ needs.verify.outputs.host }}
+          path: orbit-host
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .node-version
+      - name: Download the seven previously verified native packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: '*-package-*'
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+          path: target/packages
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: host-package-macos-aarch64
+          path: target/packages
+      - name: Validate all manifests and assemble the complete release
+        run: node scripts/prepare-release.mjs "$RELEASE_VERSION" "$GITHUB_SHA" "$GITHUB_REPOSITORY" orbit orbit-host target/packages target/release
+      - name: Publish the verified prerelease
+        run: bash scripts/publish-release.sh "$RELEASE_VERSION" "$GITHUB_SHA" target/release
