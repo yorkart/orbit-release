@@ -90,6 +90,11 @@ For a release candidate, update `sources.json`, then push a new tag matching
 publishes a prerelease only after every check passes. Candidates never change
 the stable `latest` release; install them with an explicit `--version`.
 
+Alternatively, push the release commit to a new branch named
+`release-candidates/v2026.11.12-rc.3`. This uses the same checks and creates the
+matching immutable tag when publishing the prerelease. This entry also works
+with clients that can update branches but cannot create tags or dispatch workflows.
+
 Rollout order: push the source-repository bridge changes, pin their commits, then
 validate a release candidate before publishing a stable release. Existing
 branch protection rules referencing removed build/release jobs must be adjusted
