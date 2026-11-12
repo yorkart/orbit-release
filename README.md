@@ -8,13 +8,16 @@ the public installer and update policy.
 
 ## Install and update
 
-After the first release is published:
+After a stable release is published:
 
 ```sh
 curl -fsSL https://github.com/yorkart/orbit-release/releases/latest/download/orbit-install.sh -o orbit-install.sh
 bash orbit-install.sh --role server
 bash orbit-install.sh --role host
 ```
+
+For a release candidate, download `orbit-install.sh` from that release's assets
+and pass `--version TAG`. Prereleases are excluded from the `latest` URL.
 
 Use `--version TAG` to select a release and `--repo OWNER/REPO` for a fork.
 Host also accepts `--state-dir DIR`, `--listen 127.0.0.1:PORT`, and `--no-start`.
