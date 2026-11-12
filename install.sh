@@ -27,12 +27,12 @@ main() {
     while (( $# )); do
         case "$1" in
             --role|--repo|--version)
-                (( $# >= 2 )) && [[ -n "$2" ]] || fail "$1 requires a value"
+                [[ $# -ge 2 && -n "${2:-}" ]] || fail "$1 requires a value"
                 case "$1" in --role) role=$2 ;; --repo) repository=$2 ;; --version) version=$2 ;; esac
                 shift 2 ;;
             --no-start|--skip-host) options+=("$1"); shift ;;
             --state-dir|--listen)
-                (( $# >= 2 )) && [[ -n "$2" ]] || fail "$1 requires a value"
+                [[ $# -ge 2 && -n "${2:-}" ]] || fail "$1 requires a value"
                 options+=("$1" "$2"); shift 2 ;;
             -h|--help)
                 printf '%s\n' 'Usage: install.sh --role server|host [--version TAG] [--repo OWNER/REPO]' \

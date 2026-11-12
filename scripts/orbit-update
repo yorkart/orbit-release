@@ -10,7 +10,7 @@ main() {
     while (( $# )); do
         case "$1" in
             --role|--version|--repo)
-                (( $# >= 2 )) && [[ -n "$2" ]] || fail "$1 requires a value"
+                [[ $# -ge 2 && -n "${2:-}" ]] || fail "$1 requires a value"
                 case "$1" in --role) role=$2 ;; --version) version=$2 ;; --repo) repository=$2 ;; esac
                 shift 2 ;;
             --skip-host) shift ;;
