@@ -93,9 +93,9 @@ and uploads `joint-integration` with integration.json, both exact source SHAs an
 archive checksums. It creates no GitHub Release. Each validation run has its own
 concurrency group so unrelated source pairs can be checked in parallel. Set `publish: true` on `main` to publish. Uploads are verified while the
 GitHub Release is still a draft; an existing published version cannot be replaced.
-Development repository merges do not publish. Integration-relevant PRs require
-a successful source-pair proof, but this workflow can validate unmerged commits
-and never waits for the product PR checks. Formal and RC publication always
+Development repository merges trigger asynchronous joint validation without
+publication. Product PR checks never wait for a joint proof. Manual validation
+can also select unmerged commits. Formal and RC publication always
 select the full four-platform/eight-package matrix.
 
 For a release candidate, update `sources.json`, then push a new tag matching
@@ -108,8 +108,9 @@ Alternatively, push the release commit to a new branch named
 matching immutable tag when publishing the prerelease. This entry also works
 with clients that can update branches but cannot create tags or dispatch workflows.
 
-Development order: push both product branches, validate their exact commits with
-publish=false, merge the reviewed changes, then publish the selected source pair.
+Development order: independently test product PRs, merge reviewed changes,
+observe asynchronous joint validation, and fix reported failures. Publish a
+selected source pair only through the separate explicit publication workflow.
 There is no post-publication source edit or reverse pin synchronization. Existing
 branch protection rules referencing removed build/release jobs must be adjusted
 in the development repositories' settings. Source installation and release tests
@@ -122,31 +123,51 @@ branch or full commit SHA, and leave publish=false. References resolve once befo
 building. An integration-validation/ branch is an equivalent unpublished trigger;
 its sources.json chooses the pair. This entry works before product PR checks pass.
 
-Product PR checks can dispatch this workflow automatically on `main` with their
-exact head SHA, the other product's pinned SHA from `sources.json`, and
-`publish: false`. Unpublished dispatches are named
-`Validate Server SERVER_SHA + Host HOST_SHA`; product gates use this name to find
-and reuse active runs, link to their progress and report failures immediately.
-Keep this naming contract when changing the workflow. Deploy this workflow change
-on `main` before enabling automatic dispatch in either product repository.
+## Automatic integration after product merges
 
-In both product repositories, configure the Actions secret `ORBIT_RELEASE_TOKEN`
-with a fine-grained token scoped to this repository: Actions read/write and
-Contents read. Their default `GITHUB_TOKEN` cannot dispatch here. For a coordinated
-change, set the product repository's Actions variable `ORBIT_JOINT_PEER_REF` to
-the other product's branch, tag or exact SHA; the gate resolves it before dispatch.
-Remove that override after the coordinated change. Fork PRs receive no dispatch
-secret and require manual validation followed by rerunning their product check.
+Every PR merged into `main` in `yorkart/orbit` or `yorkart/orbit-host` immediately
+runs a separate **Notify merged PR** workflow. It dispatches this repository's
+`release.yml` on `main` with `merged_repository`, `merged_pr`, `merged_sha` and
+`publish: false`, then exits without waiting for validation or product CI. Open
+PRs, PR updates and closed-but-unmerged PRs do not trigger this workflow.
 
-After all independent checks, actual packages and Linux/macOS acceptance pass,
-the workflow emits the successful job named Joint integration SERVER_SHA HOST_SHA.
-Server and Host CI check this public Actions metadata for their exact PR heads;
-they download no Host artifact. Their required test check aggregates independent
-and joint checks. Keep that test check required in product branch protection.
-Frontend/docs-only changes need no new joint proof; post-merge CI is independent.
-New integration-relevant commits require a new pair validation, with no pin edit.
-Only repository-authorized push/dispatch runs can supply a proof; fork PR runs and
-incomplete/failed proofs cannot admit a merge.
+The merged source is pinned to its merge commit SHA. The other source is resolved
+from its current `main` to an exact SHA before builds begin. This path ignores
+`sources.json` publication pins and rejects manual source overrides, publication
+requests and non-main release refs. Every merged PR is validated, including
+frontend/docs-only PRs; the product PR itself never waits for this validation.
+Manual dispatch without merge metadata retains the existing source overrides
+and publication controls described above.
+
+Success records both source SHAs and package checksums in the `joint-integration`
+artifact. Every post-merge run also writes `post-merge-result.json` with check
+results, source PR/merge SHA, resolved source pair, workflow SHA and log links;
+it is uploaded as `post-merge-result` for 90 days and summarized in Actions.
+Failures create an Issue in this repository with those details and links to the
+failed jobs and steps. A rerun updates/reopens the Issue for the same source merge
+instead of creating another. Runs for that merge are serialized without
+cancelling earlier validation; unrelated merges can validate concurrently.
+Cancelled validation is recorded without creating a failure Issue. Successful
+reruns record success but leave earlier failure Issues for maintainers to close.
+If source resolution fails, the report retains the triggering merge SHA and
+explicitly marks any unresolved peer. Issue-reporting failures fail their job
+visibly while preserving the result artifact for manual recovery.
+
+Deploy this release workflow before the product notification workflows. Retain
+`test` as each product's independent-check aggregate; remove any branch rules
+requiring the retired product `joint-integration` check. No product polling,
+pre-merge proof lookup or `ORBIT_JOINT_PEER_REF` override remains.
+
+Credentials:
+
+- In both product repositories, `ORBIT_RELEASE_TOKEN` needs Actions read/write
+  and Contents read access to `yorkart/orbit-release`. Notifications execute only
+  trusted base workflow code after merge, including for merged fork PRs. If
+  notification fails, rerun its job after correcting credentials or deployment.
+- In this repository, `ORBIT_SOURCE_TOKEN` needs Contents read access to both
+  source repositories, including private sources. Checkouts never persist it.
+- The result job uses this repository's `GITHUB_TOKEN` with Actions read and
+  Issues write permission; no additional issue token is needed.
 
 ## Validate tooling locally
 

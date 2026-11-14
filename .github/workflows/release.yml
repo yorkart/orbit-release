@@ -1,5 +1,5 @@
 name: Build and release Orbit
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('{0} Server {1} + Host {2}', inputs.publish && 'Release' || 'Validate', inputs.server_ref || 'sources.json', inputs.host_ref || 'sources.json') || github.event.head_commit.message }}
+run-name: ${{ inputs.merged_repository && format('Post-merge {0}#{1} {2}', inputs.merged_repository, inputs.merged_pr, inputs.merged_sha) || github.event_name == 'workflow_dispatch' && format('{0} Server {1} + Host {2}', inputs.publish && 'Release' || 'Validate', inputs.server_ref || 'sources.json', inputs.host_ref || 'sources.json') || github.event.head_commit.message }}
 'on':
   workflow_dispatch:
     inputs:
@@ -19,6 +19,18 @@ run-name: ${{ github.event_name == 'workflow_dispatch' && format('{0} Server {1}
         description: Publish after validation (main only)
         type: boolean
         default: false
+      merged_repository:
+        description: Product repository notifying a merged PR (empty for manual validation)
+        type: string
+        required: false
+      merged_pr:
+        description: Merged PR number
+        type: string
+        required: false
+      merged_sha:
+        description: Exact commit merged into the product main branch
+        type: string
+        required: false
   push:
     branches:
       - release-candidates/v*-rc.*
@@ -28,7 +40,7 @@ run-name: ${{ github.event_name == 'workflow_dispatch' && format('{0} Server {1}
 permissions:
   contents: read
 concurrency:
-  group: ${{ (inputs.publish || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release-candidates/')) && 'orbit-release' || format('orbit-validation-{0}', github.run_id) }}
+  group: ${{ inputs.merged_repository && format('orbit-post-merge-{0}-{1}', inputs.merged_repository, inputs.merged_sha) || (inputs.publish || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release-candidates/')) && 'orbit-release' || format('orbit-validation-{0}', github.run_id) }}
   cancel-in-progress: false
 defaults:
   run:
@@ -37,7 +49,6 @@ jobs:
   tooling:
     uses: ./.github/workflows/ci.yml
   resolve:
-    needs: tooling
     runs-on: ubuntu-24.04
     outputs:
       server: ${{ steps.sources.outputs.server }}
@@ -57,11 +68,15 @@ jobs:
             echo "::error::Configure ORBIT_SOURCE_TOKEN in yorkart/orbit-release with Contents read access to yorkart/orbit and yorkart/orbit-host."
             exit 1
           fi
-      - name: Select pinned sources
+      - name: Select merged or pinned sources
         id: refs
         env:
           SERVER_REF: ${{ inputs.server_ref }}
           HOST_REF: ${{ inputs.host_ref }}
+          MERGED_REPOSITORY: ${{ inputs.merged_repository }}
+          MERGED_PR: ${{ inputs.merged_pr }}
+          MERGED_SHA: ${{ inputs.merged_sha }}
+          PUBLISH_REQUEST: ${{ inputs.publish }}
         run: node scripts/source-refs.mjs
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -86,12 +101,14 @@ jobs:
           version=${REQUESTED_VERSION#release-candidates/}
           version=${version:-v$(date -u +%Y.%m.%d)-${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}}
           [[ "$version" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]
+          printf 'server=%s\nhost=%s\nversion=%s\n' "$server" "$host" "$version" >> "$GITHUB_OUTPUT"
+      - name: Check paired runtime and source compatibility
+        run: |
           cmp orbit/.node-version orbit-host/.node-version
           cmp .node-version orbit/.node-version
           cmp orbit/scripts/share-node-runtime.mjs orbit-host/scripts/share-node-runtime.mjs
           test -f orbit/scripts/release-update.sh
           test -f orbit-host/scripts/release-update.sh
-          printf 'server=%s\nhost=%s\nversion=%s\n' "$server" "$host" "$version" >> "$GITHUB_OUTPUT"
       - id: plan
         env:
           PUBLISH_REQUEST: ${{ inputs.publish }}
@@ -612,3 +629,37 @@ jobs:
           name: joint-integration
           path: target/integration.json
           if-no-files-found: error
+  post-merge-result:
+    if: always() && inputs.merged_repository != ''
+    needs: [tooling, resolve, server-lint, server-test, server-test-scripts, server-frontend, host-lint, host-test, server-build, host-build, joint-integration]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .node-version
+      - name: Record result and create or update a failure issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MERGED_REPOSITORY: ${{ inputs.merged_repository }}
+          MERGED_PR: ${{ inputs.merged_pr }}
+          MERGED_SHA: ${{ inputs.merged_sha }}
+          SERVER_REVISION: ${{ needs.resolve.outputs.server }}
+          HOST_REVISION: ${{ needs.resolve.outputs.host }}
+          CHECK_RESULTS: ${{ toJSON(needs) }}
+        run: node scripts/post-merge-report.mjs
+      - name: Preserve the post-merge result even when issue reporting fails
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: post-merge-result
+          path: target/post-merge-result.json
+          if-no-files-found: error
+          retention-days: 90
