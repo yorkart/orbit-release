@@ -113,6 +113,22 @@ branch or full commit SHA, and leave publish=false. References resolve once befo
 building. An integration-validation/ branch is an equivalent unpublished trigger;
 its sources.json chooses the pair. This entry works before product PR checks pass.
 
+Product PR checks can dispatch this workflow automatically on `main` with their
+exact head SHA, the other product's pinned SHA from `sources.json`, and
+`publish: false`. Unpublished dispatches are named
+`Validate Server SERVER_SHA + Host HOST_SHA`; product gates use this name to find
+and reuse active runs, link to their progress and report failures immediately.
+Keep this naming contract when changing the workflow. Deploy this workflow change
+on `main` before enabling automatic dispatch in either product repository.
+
+In both product repositories, configure the Actions secret `ORBIT_RELEASE_TOKEN`
+with a fine-grained token scoped to this repository: Actions read/write and
+Contents read. Their default `GITHUB_TOKEN` cannot dispatch here. For a coordinated
+change, set the product repository's Actions variable `ORBIT_JOINT_PEER_REF` to
+the other product's branch, tag or exact SHA; the gate resolves it before dispatch.
+Remove that override after the coordinated change. Fork PRs receive no dispatch
+secret and require manual validation followed by rerunning their product check.
+
 After all independent checks, actual packages and Linux/macOS acceptance pass,
 the workflow emits the successful job named Joint integration SERVER_SHA HOST_SHA.
 Server and Host CI check this public Actions metadata for their exact PR heads;
