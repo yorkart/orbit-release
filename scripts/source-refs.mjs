@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { postMergeRefs } from './merged-source.mjs';
 
 export function sourceRefs(pins, overrides = {}) {
   const refs = {};
@@ -14,7 +15,9 @@ export function sourceRefs(pins, overrides = {}) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const pins = JSON.parse(readFileSync(new URL('../sources.json', import.meta.url), 'utf8'));
-  const refs = sourceRefs(pins, { server: process.env.SERVER_REF, host: process.env.HOST_REF });
+  const overrides = { server: process.env.SERVER_REF, host: process.env.HOST_REF };
+  const refs = postMergeRefs({ repository: process.env.MERGED_REPOSITORY, number: process.env.MERGED_PR, sha: process.env.MERGED_SHA },
+    { ...overrides, ref: process.env.GITHUB_REF, publish: process.env.PUBLISH_REQUEST })
+    ?? sourceRefs(JSON.parse(readFileSync(new URL('../sources.json', import.meta.url), 'utf8')), overrides);
   appendFileSync(process.env.GITHUB_OUTPUT, `server=${refs.server}\nhost=${refs.host}\n`);
 }
