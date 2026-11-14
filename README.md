@@ -69,6 +69,15 @@ version starting with `v` followed by a digit. Branches/tags are resolved once t
 full commit SHAs before any matrix jobs start. Both sources must match this
 repository's `.node-version`.
 
+Both source repositories are private. Configure the Actions secret
+`ORBIT_SOURCE_TOKEN` in `yorkart/orbit-release` with a fine-grained token selecting
+`yorkart/orbit` and `yorkart/orbit-host`, granting **Contents: read**. Source checkout
+steps use this credential and do not persist it in Git configuration. The default
+`GITHUB_TOKEN` only has access to the release repository and cannot read these
+private sources. A missing source token fails before checkout with a setup message.
+This credential is separate from `ORBIT_RELEASE_TOKEN` in the product repositories,
+which authorizes dispatching release validation.
+
 The workflow runs source lint, Linux/macOS tests, package/installer regressions,
 native builds and smoke tests for Linux/macOS on x86_64/aarch64. It invokes each
 repository's existing packaging and release validation scripts. All checks and
